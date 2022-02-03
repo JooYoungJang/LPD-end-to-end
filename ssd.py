@@ -6,6 +6,7 @@ from layers import *
 from data import carplate, change_cfg_for_ssd512, change_cfg_for_ssd512x640
 import os
 import time
+from layers.box_utils import decode, nms
 
 class Timer(object):
     """A simple timer."""
@@ -82,6 +83,10 @@ class SSD(nn.Module):
             self.softmax = nn.Softmax(dim=-1)
             self.detect = Detect(num_classes, 0, 200, 0.01, 0.45)
 
+        if phase == 'export':
+            self.softmax = nn.Softmax(dim=-1)
+            self.detect = None
+
     def forward(self, x):
         """Applies network layers and ops on input image(s) x.
 
@@ -156,6 +161,41 @@ class SSD(nn.Module):
                                     self.num_classes)),         # conf preds
                 self.priors.type(type(x.data))                  # default boxes
             )
+        elif self.phase == "export":
+            variance = [0.1, 0.2]
+            loc_data = loc.view(loc.size(0), -1, 4)
+            prior_data = self.priors.type(type(x.data))                  # default boxes
+            conf_data = self.softmax(conf.view(conf.size(0), -1, self.num_classes))         # conf preds
+            
+            num = loc_data.size(0)  # batch size
+            num_priors = prior_data.size(0)
+            output = torch.zeros(num, self.num_classes, 200, 5)
+            conf_preds = conf_data.view(num, num_priors,
+                                        self.num_classes).transpose(2, 1)  # [batch,num_classes,num_priors]
+
+            # Decode predictions into bboxes.
+            for i in range(num):
+                decoded_boxes = decode(loc_data[i], prior_data, variance)  # [num_priors,4]
+                # For each class, perform nms
+                conf_scores = conf_preds[i].clone()  # [num_classes,num_priors]
+
+                for cl in range(1, self.num_classes):
+                    c_mask = conf_scores[cl].gt(0.01)  # [num_priors]
+                    scores = conf_scores[cl][c_mask]
+                    if scores.size(0) == 0:
+                        continue
+                    l_mask = c_mask.unsqueeze(1).expand_as(decoded_boxes)
+                    boxes = decoded_boxes[l_mask].view(-1, 4)
+                    # idx of highest scoring and non-overlapping boxes per class
+                    ids, count = nms(boxes, scores, 0.45, 200)
+                    output[i, cl, :count] = \
+                        torch.cat((scores[ids[:count]].unsqueeze(1),
+                                boxes[ids[:count]]), 1)
+            flt = output.contiguous().view(num, -1, 5)
+            _, idx = flt[:, :, 0].sort(1, descending=True)
+            _, rank = idx.sort(1)
+            flt[(rank < 200).unsqueeze(-1).expand_as(flt)].fill_(0)
+            return output
             # output = self.detect(
             #     loc.view(loc.size(0), -1, 4),                   # loc preds
             #     self.softmax(conf.view(conf.size(0), -1,
@@ -270,7 +310,7 @@ mbox = {
 
 
 def build_ssd(phase, size=300, num_classes=21):
-    if phase != "test" and phase != "train":
+    if phase != "test" and phase != "train" and phase != "export":
         print("ERROR: Phase: " + phase + " not recognized")
         return
     if size != 300 and size != 512:
@@ -286,4 +326,5 @@ def build_ssd(phase, size=300, num_classes=21):
                                      add_extras(extras[str(size)], size, 1024),
                                      mbox[str(size)], num_classes, from_vgg=2)
     return SSD(phase, size, base_, extras_, head_, num_classes)
+
 

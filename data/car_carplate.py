@@ -1,4 +1,3 @@
-from .config import HOME
 import os.path as osp
 import sys
 import torch
@@ -10,11 +9,16 @@ if sys.version_info[0] == 2:
 else:
     import xml.etree.ElementTree as ET
 
-CAR_CARPLATE_TWO_STAGE_END2END_CLASSES = (  # always index 0
+CAR_CARPLATE_CLASSES = (  # always index 0
     'car', 'carplate')
+CARPLATE_CLASSES = (
+    'carplate'
+)
+# note: if you used our download scripts, this should be right
+CAR_CARPLATE_ROOT = osp.join('/data', "TILT/720p/car_carplate/")
 
 
-class CAR_CARPLATE_TWO_STAGE_END2ENDAnnotationTransform(object):
+class CAR_CARPLATEAnnotationTransform(object):
     """Transforms a VOC annotation into a Tensor of bbox coords and label index
     Initilized with a dictionary lookup of classnames to indexes
 
@@ -29,7 +33,7 @@ class CAR_CARPLATE_TWO_STAGE_END2ENDAnnotationTransform(object):
 
     def __init__(self, class_to_ind=None, keep_difficult=False):
         self.class_to_ind = class_to_ind or dict(
-            zip(CAR_CARPLATE_TWO_STAGE_END2END_CLASSES, range(len(CAR_CARPLATE_TWO_STAGE_END2END_CLASSES))))
+            zip(CAR_CARPLATE_CLASSES, range(len(CAR_CARPLATE_CLASSES))))
         self.keep_difficult = keep_difficult
 
     def __call__(self, target, width, height):
@@ -47,7 +51,6 @@ class CAR_CARPLATE_TWO_STAGE_END2ENDAnnotationTransform(object):
                 continue
             name = obj.find('name').text.lower().strip()
             bbox = obj.find('bndbox')
-            has_carplate = int(obj.find('has_carplate').text)
 
             pts = ['xmin', 'ymin', 'xmax', 'ymax']
             bndbox = []
@@ -56,40 +59,15 @@ class CAR_CARPLATE_TWO_STAGE_END2ENDAnnotationTransform(object):
                 # scale height or width
                 cur_pt = cur_pt / width if i % 2 == 0 else cur_pt / height
                 bndbox.append(cur_pt)
-            # has carplate
-            bndbox.append(has_carplate)
-            # offset, width and height of carplate
-            offsets = ['width', 'height', 'x_offset', 'y_offset']
-            for i, offset in enumerate(offsets):
-                if has_carplate:
-                    cur_offset = float(bbox.find(offset).text)
-                    # scale height or width
-                    cur_offset = cur_offset / width if i % 2 == 0 else cur_offset / height
-                    bndbox.append(cur_offset)
-                else:
-                    bndbox.append(0)
-            lp_pts = ['carplate_xmin', 'carplate_ymin', 'carplate_xmax', 'carplate_ymax',
-                       'carplate_x_top_left', 'carplate_y_top_left', 'carplate_x_top_right', 'carplate_y_top_right',
-                       'carplate_x_bottom_right', 'carplate_y_bottom_right', 'carplate_x_bottom_left', 'carplate_y_bottom_left']
-            for i, lp_pt in enumerate(lp_pts):
-                if has_carplate:
-                    cur_lp_pt = float(bbox.find(lp_pt).text) - 1
-                    # lp bbox or four corners
-                    cur_lp_pt = cur_lp_pt / width if i % 2 == 0 else cur_lp_pt / height
-                    bndbox.append(cur_lp_pt)
-                else:
-                    bndbox.append(0)
-            # label -1
             label_idx = self.class_to_ind[name]
             bndbox.append(label_idx)
-            # if no carplate, has_carplate,size and offset are set to 0
-            res += [bndbox]  # [xmin, ymin, xmax, ymax, has_carplate, width, height, x_offset, y_offset, carplate_bbox, carplate_four_points, label_ind]
+            res += [bndbox]  # [xmin, ymin, xmax, ymax, label_ind]
             # img_id = target.find('filename').text[:-4]
 
-        return res  # [[xmin, ymin, xmax, ymax, has_carplate, width, height, x_offset, y_offset, carplate_bbox, carplate_four_points, label_ind], ... ]
+        return res  # [[xmin, ymin, xmax, ymax, label_ind], ... ]
 
 
-class CAR_CARPLATE_TWO_STAGE_END2ENDDetection(data.Dataset):
+class CAR_CARPLATEDetection(data.Dataset):
     """VOC Detection Dataset Object
 
     input is image, target is annotation
@@ -108,7 +86,7 @@ class CAR_CARPLATE_TWO_STAGE_END2ENDDetection(data.Dataset):
 
     def __init__(self, root,
                  image_sets=None,
-                 transform=None, target_transform=CAR_CARPLATE_TWO_STAGE_END2ENDAnnotationTransform(keep_difficult=True),
+                 transform=None, target_transform=CAR_CARPLATEAnnotationTransform(keep_difficult=True),
                  dataset_name='trainval'):
         self.root = root
         self.image_set = image_sets
@@ -123,6 +101,7 @@ class CAR_CARPLATE_TWO_STAGE_END2ENDDetection(data.Dataset):
 
     def __getitem__(self, index):
         im, gt, h, w = self.pull_item(index)
+
         return im, gt
 
     def __len__(self):
@@ -140,7 +119,7 @@ class CAR_CARPLATE_TWO_STAGE_END2ENDDetection(data.Dataset):
 
         if self.transform is not None:
             target = np.array(target)
-            img, boxes, labels = self.transform(img, target[:, :-1], target[:, -1])
+            img, boxes, labels = self.transform(img, target[:, :4], target[:, 4])
             # to rgb
             img = img[:, :, (2, 1, 0)]
             # img = img.transpose(2, 0, 1)
@@ -160,7 +139,6 @@ class CAR_CARPLATE_TWO_STAGE_END2ENDDetection(data.Dataset):
             PIL img
         '''
         img_id = self.ids[index]
-        print(img_id)
         return cv2.imread(self._imgpath % img_id, cv2.IMREAD_COLOR)
 
     def pull_anno(self, index):

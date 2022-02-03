@@ -1,4 +1,5 @@
 from .car_carplate_two_stage_end2end import CAR_CARPLATE_TWO_STAGE_END2ENDDetection, CAR_CARPLATE_TWO_STAGE_END2ENDAnnotationTransform, CAR_CARPLATE_TWO_STAGE_END2END_CLASSES
+from .car_carplate import CAR_CARPLATEDetection, CAR_CARPLATEAnnotationTransform, CAR_CARPLATE_CLASSES, CAR_CARPLATE_ROOT, CARPLATE_CLASSES
 
 from .config import *
 import torch
@@ -27,11 +28,13 @@ def detection_collate(batch):
 
 
 def base_transform(image, size, mean):
-    x = cv2.resize(image, (size, size)).astype(np.float32)
+    if type(size) == type(()):
+        x = cv2.resize(image, (size[1], size[0])).astype(np.float32)
+    else:
+        x = cv2.resize(image, (size, size)).astype(np.float32)
     x -= mean
     x = x.astype(np.float32)
     return x
-
 
 class BaseTransform:
     def __init__(self, size, mean):

@@ -1,7 +1,6 @@
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from torch.autograd import Variable
 from layers import *
 from data import two_stage_end2end, change_cfg_for_ssd512
 import os
@@ -10,13 +9,6 @@ import numpy as np
 from layers.modules import ProposalTargetLayer_offset
 # https://github.com/longcw/RoIAlign.pytorch
 from roi_align.crop_and_resize import CropAndResizeFunction
-
-
-def to_varabile(tensor, requires_grad=False, is_cuda=True):
-    if is_cuda:
-        tensor = tensor.cuda()
-    var = Variable(tensor, requires_grad=requires_grad)
-    return var
 
 
 def a_include_b(a_bbox, b_bbox):
@@ -57,10 +49,10 @@ class SSD_two_stage_end2end(nn.Module):
             self.cfg = change_cfg_for_ssd512(self.cfg)
         self.priorbox = PriorBox(self.cfg)
         with torch.no_grad():
-            self.priors = Variable(self.priorbox.forward())
+            self.priors = self.priorbox.forward()
         self.priorbox_2 = PriorBox_2(self.cfg)
         with torch.no_grad():
-            self.priors_2 = Variable(self.priorbox_2.forward())
+            self.priors_2 = self.priorbox_2.forward()
         self.size = size
         self.size_2 = size_2
         self.expand_num = expand_num
@@ -79,7 +71,7 @@ class SSD_two_stage_end2end(nn.Module):
 
         self.softmax = nn.Softmax(dim=-1)
         self.sigmoid = nn.Sigmoid()
-        self.detect = Detect_offset(num_classes, 0, 200, 0.01, 0.45)
+        # self.detect = Detect_offset(num_classes, 0, 200, 0.01, 0.45)
 
         # SSD network
         self.vgg_2 = nn.ModuleList(base_2)
@@ -90,7 +82,7 @@ class SSD_two_stage_end2end(nn.Module):
 
         if phase == 'test':
             self.softmax_2 = nn.Softmax(dim=-1)
-            self.detect_2 = Detect_four_corners(num_classes, 0, 200, 0.01, 0.45)
+            # self.detect_2 = Detect_four_corners(num_classes, 0, 200, 0.01, 0.45)
 
     def forward(self, x, targets):
         """Applies network layers and ops on input image(s) x.
@@ -164,7 +156,7 @@ class SSD_two_stage_end2end(nn.Module):
         offset = torch.cat([o.view(o.size(0), -1) for o in offset], 1)
 
         # [num, num_classes, top_k, 10]
-        rpn_rois = self.detect(
+        rpn_rois = Detect_offset.apply(self.num_classes, 0, 200, 0.01, 0.45,
             loc.view(loc.size(0), -1, 4),  # loc preds
             self.softmax(conf.view(conf.size(0), -1,
                                    self.num_classes)),  # conf preds
@@ -219,9 +211,11 @@ class SSD_two_stage_end2end(nn.Module):
             image_data = conv1_1_feat.repeat(rois_squeeze.shape[0], 1, 1, 1)
 
             # Convert from numpy to Variables
-            image_torch = to_varabile(image_data, is_cuda=is_cuda, requires_grad=False)
-            boxes = to_varabile(boxes_data, is_cuda=is_cuda, requires_grad=False)
-            box_index = to_varabile(box_index_data, is_cuda=is_cuda, requires_grad=False)
+            if is_cuda:
+                with torch.no_grad():
+                    image_torch = image_data.cuda() 
+                    boxes = boxes_data.cuda()
+                    box_index = box_index_data.cuda()
 
             # Crops and resize bbox1 from img1 and bbox2 from img2
             # n*64*crop_height*crop_width
@@ -252,7 +246,7 @@ class SSD_two_stage_end2end(nn.Module):
             conf_2 = torch.cat([o.view(o.size(0), -1) for o in conf_2], 1)
             four_corners_2 = torch.cat([o.view(o.size(0), -1) for o in four_corners_2], 1)
 
-            output_2 = self.detect_2(
+            output_2 = Detect_four_corners.apply(self.num_classes, 0, 200, 0.01, 0.45,
                 loc_2.view(loc_2.size(0), -1, 4),
                 self.softmax_2(conf_2.view(conf_2.size(0), -1,
                                             self.num_classes)),
